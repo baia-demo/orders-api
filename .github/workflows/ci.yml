@@ -4,12 +4,16 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, closed]
 
 env:
-  APP_URL: https://shopflow-orders-api.fly.dev
+  APP_NAME: shopflow-orders-api
+  PROD_URL: https://shopflow-orders-api.fly.dev
 
 jobs:
   test:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,6 +23,68 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+
+  preview-deploy:
+    needs: test
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    concurrency: preview-${{ github.event.pull_request.number }}
+    outputs:
+      preview_url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Ensure preview app exists
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_ORG_TOKEN }}
+        run: |
+          PREVIEW="${APP_NAME}-pr-${{ github.event.pull_request.number }}"
+          if ! flyctl status -a "$PREVIEW" >/dev/null 2>&1; then
+            flyctl apps create "$PREVIEW" --org personal
+          fi
+      - name: Deploy preview
+        id: deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_ORG_TOKEN }}
+        run: |
+          PREVIEW="${APP_NAME}-pr-${{ github.event.pull_request.number }}"
+          flyctl deploy --remote-only --ha=false --app "$PREVIEW"
+          echo "url=https://${PREVIEW}.fly.dev" >> "$GITHUB_OUTPUT"
+
+  preview-smoke:
+    needs: preview-deploy
+    runs-on: ubuntu-latest
+    env:
+      APP_URL: ${{ needs.preview-deploy.outputs.preview_url }}
+    steps:
+      - name: Health check
+        run: curl -sf --retry 5 --retry-delay 5 --retry-all-errors "$APP_URL/health"
+
+      - name: POST /orders cria pedido
+        run: |
+          BODY=$(curl -sf -X POST "$APP_URL/orders" \
+            -H 'content-type: application/json' \
+            -d '{"customerId":"smoke-ci","items":[{"productId":"p-001","name":"Smoke","price":10,"quantity":1}]}')
+          ID=$(echo "$BODY" | jq -r '.id')
+          test -n "$ID" && [ "$ID" != "null" ]
+
+      - name: Payload inválido retorna 400
+        run: |
+          CODE=$(curl -sw "%{http_code}" -o /dev/null -X POST "$APP_URL/orders" \
+            -H 'content-type: application/json' -d '{}')
+          test "$CODE" = "400"
+
+  preview-cleanup:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Destroy preview app
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_ORG_TOKEN }}
+        run: |
+          PREVIEW="${APP_NAME}-pr-${{ github.event.pull_request.number }}"
+          flyctl apps destroy "$PREVIEW" --yes || true
 
   deploy:
     needs: test
@@ -36,6 +102,8 @@ jobs:
     needs: deploy
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    env:
+      APP_URL: ${{ env.PROD_URL }}
     steps:
       - name: Health check
         run: curl -sf --retry 5 --retry-delay 5 --retry-all-errors "$APP_URL/health"
@@ -47,7 +115,6 @@ jobs:
             -d '{"customerId":"smoke-ci","items":[{"productId":"p-001","name":"Smoke","price":10,"quantity":1}]}')
           ID=$(echo "$BODY" | jq -r '.id')
           STATUS=$(echo "$BODY" | jq -r '.status')
-          echo "Pedido criado: $ID (status=$STATUS)"
           test -n "$ID" && [ "$ID" != "null" ]
           test "$STATUS" = "pending"
 
@@ -60,5 +127,4 @@ jobs:
         run: |
           CODE=$(curl -sw "%{http_code}" -o /dev/null -X POST "$APP_URL/orders" \
             -H 'content-type: application/json' -d '{}')
-          echo "Code pra payload vazio: $CODE"
           test "$CODE" = "400"
