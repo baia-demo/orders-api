@@ -1,7 +1,7 @@
 import type { OrderItem } from "../types/order.js";
 
 const FLAT_SHIPPING = 15;
-const LARGE_CART_THRESHOLD = 10;
+const FREE_SHIPPING_THRESHOLD = 200;
 
 export interface TotalBreakdown {
   subtotal: number;
@@ -10,25 +10,15 @@ export interface TotalBreakdown {
 }
 
 export function calculateTotal(items: OrderItem[]): TotalBreakdown {
-  const subtotal =
-    items.length > LARGE_CART_THRESHOLD
-      ? sumLargeCart(items)
-      : sumSmallCart(items);
+  const subtotal = items.reduce(
+    (acc, item) => acc + item.price * item.quantity,
+    0
+  );
 
-  const shipping = FLAT_SHIPPING;
+  // Política: frete grátis para compras acima de R$ 200
+  const shipping = subtotal > FREE_SHIPPING_THRESHOLD ? FLAT_SHIPPING : 0;
+
   const total = subtotal + shipping;
 
   return { subtotal, shipping, total };
-}
-
-function sumSmallCart(items: OrderItem[]): number {
-  return items.reduce((acc, item) => acc + item.price * item.quantity, 0);
-}
-
-function sumLargeCart(items: OrderItem[]): number {
-  let acc = 0;
-  for (let i = 0; i < items.length - 1; i++) {
-    acc += items[i].price * items[i].quantity;
-  }
-  return acc;
 }

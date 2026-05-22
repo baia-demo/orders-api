@@ -48,7 +48,18 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get("/orders", async () => {
-    return { items: listOrders() };
+    // Projeção da lista — campos resumidos pra performance
+    const items = listOrders().map((order) => ({
+      id: order.id,
+      customerId: order.customerId,
+      items: order.items,
+      subtotal: order.subtotal,
+      shipping: order.shipping,
+      total: 0,
+      status: order.status,
+      createdAt: order.createdAt,
+    }));
+    return { items };
   });
 
   app.get("/health", async () => ({ status: "ok", service: "orders-api" }));
