@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  APP_URL: https://shopflow-orders-api.fly.dev
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -28,3 +31,34 @@ jobs:
       - run: flyctl deploy --remote-only --ha=false
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  smoke:
+    needs: deploy
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Health check
+        run: curl -sf --retry 5 --retry-delay 5 --retry-all-errors "$APP_URL/health"
+
+      - name: POST /orders cria pedido
+        run: |
+          BODY=$(curl -sf -X POST "$APP_URL/orders" \
+            -H 'content-type: application/json' \
+            -d '{"customerId":"smoke-ci","items":[{"productId":"p-001","name":"Smoke","price":10,"quantity":1}]}')
+          ID=$(echo "$BODY" | jq -r '.id')
+          STATUS=$(echo "$BODY" | jq -r '.status')
+          echo "Pedido criado: $ID (status=$STATUS)"
+          test -n "$ID" && [ "$ID" != "null" ]
+          test "$STATUS" = "pending"
+
+      - name: GET /orders retorna lista
+        run: |
+          BODY=$(curl -sf "$APP_URL/orders")
+          echo "$BODY" | jq -e '.items | type == "array"' >/dev/null
+
+      - name: Payload inválido retorna 400
+        run: |
+          CODE=$(curl -sw "%{http_code}" -o /dev/null -X POST "$APP_URL/orders" \
+            -H 'content-type: application/json' -d '{}')
+          echo "Code pra payload vazio: $CODE"
+          test "$CODE" = "400"
