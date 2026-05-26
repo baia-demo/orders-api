@@ -55,7 +55,7 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
       items: order.items,
       subtotal: order.subtotal,
       shipping: order.shipping,
-      total: 0,
+      total: order.total,
       status: order.status,
       createdAt: order.createdAt,
     }));
